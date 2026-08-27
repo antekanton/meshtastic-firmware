@@ -125,6 +125,10 @@ bool FloodingRouter::roleAllowsCancelingDupe(const meshtastic_MeshPacket *p)
     }
 
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_CLIENT_BASE) {
+        // always rebroadcast text message
+        if (p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+            return false;
+        }
         // CLIENT_BASE: if the packet is from or to a favorited node,
         // we should act like a ROUTER and should never cancel a rebroadcast (i.e. we should always rebroadcast),
         // even if we've heard another station rebroadcast it already.
