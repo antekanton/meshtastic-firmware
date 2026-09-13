@@ -125,8 +125,11 @@ bool FloodingRouter::roleAllowsCancelingDupe(const meshtastic_MeshPacket *p)
     }
 
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_CLIENT_BASE) {
+        // Only CLIENT_BASE needs to inspect portnum (to always rebroadcast text messages)
+        perhapsDecode(const_cast<meshtastic_MeshPacket *>(p));
         // always rebroadcast text message
-        if (p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+        if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+            p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
             LOG_INFO("Always rebroadcast text message");
             return false;
         }
