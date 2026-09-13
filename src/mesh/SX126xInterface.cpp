@@ -91,7 +91,8 @@ template <typename T> bool SX126xInterface<T>::init()
     if (power < -9)
         power = -9;
 
-    int res = lora.begin(getFreq(), bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage, useRegulatorLDO);
+	lora.XTAL = true;
+    int res = lora.begin(getFreq(), bw, sf, cr, syncWord, power, preambleLength, 0.0f, useRegulatorLDO);
 
 #ifdef SX126X_PA_RAMP_US
     // Set custom PA ramp time for boards requiring longer stabilization (e.g., T-Beam 1W needs >800us)
