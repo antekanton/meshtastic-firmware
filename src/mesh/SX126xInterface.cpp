@@ -439,31 +439,25 @@ template <typename T> void SX126xInterface<T>::resetAGC()
 
     // 5. Re-calibrate image rejection for actual operating frequency
     //    Calibrate(0x7F) defaults to 902-928 MHz which is wrong for other regions.
+    //
+    // NOTE: On some boards (observed on LilyGO T3S3), RadioLib's internal BUSY
+    // timeout inside calibrateImage() is right on the edge of the chip's actual
+    // TCXO/PLL settle time. This can return RADIOLIB_ERR_SPI_CMD_TIMEOUT (-707)
+    // even though the chip finishes calibrating a fraction of a millisecond later
+    // (confirmed: BUSY reads low immediately after the call returns -707).
+    // A short settle delay + single retry works around this without touching
+    // RadioLib itself.
     LOG_DEBUG("SX126x AGC reset: calling calibrateImage(%f)", getFreq());
     int16_t imgCalState = lora.calibrateImage(getFreq());
-    LOG_DEBUG("SX126x AGC reset: calibrateImage returned %d", imgCalState);
+    if (imgCalState == RADIOLIB_ERR_SPI_CMD_TIMEOUT) {
+        LOG_WARN("SX126x AGC reset: calibrateImage timed out (-707), retrying after settle delay");
+        module.hal->delay(2); // give TCXO/PLL a bit more time to finish settling
+        imgCalState = lora.calibrateImage(getFreq());
+        LOG_DEBUG("SX126x AGC reset: calibrateImage retry returned %d", imgCalState);
+    }
 
-    // --- DIAGNOSTIC: explicit BUSY wait after calibrateImage() ---
-    // calibrateImage() internally moves the chip through STDBY_XOSC, which
-    // re-triggers TCXO power-up + settle. Unlike the CALIBRATE_ALL step above,
-    // there is no manual BUSY poll here today — we rely entirely on RadioLib's
-    // internal wait. If TCXO settle time on this board's TCXO part is longer
-    // than what RadioLib assumes, the chip may still be mid-calibration when
-    // we proceed, corrupting the following SPI transactions (0x8B5 patch,
-    // setStandby() in startReceive()).
-    {
-        uint32_t busyStart = millis();
-        while (module.hal->digitalRead(module.getGpio())) {
-            if (millis() - busyStart > 100) {
-                LOG_WARN("SX126x AGC reset: BUSY still HIGH %lums after calibrateImage() "
-                         "returned — TCXO/PLL may not have settled",
-                         (unsigned long)(millis() - busyStart));
-                break;
-            }
-            module.hal->yield();
-        }
-        LOG_DEBUG("SX126x AGC reset: post-calibrateImage BUSY wait took %lums",
-                  (unsigned long)(millis() - busyStart));
+    if (imgCalState != RADIOLIB_ERR_NONE) {
+        LOG_WARN("SX126x AGC reset: calibrateImage failed after retry (err=%d)", imgCalState);
     }
 
     // Re-apply settings that calibration may have reset
@@ -471,7 +465,6 @@ template <typename T> void SX126xInterface<T>::resetAGC()
     // DIO2 as RF switch
 #ifdef SX126X_DIO2_AS_RF_SWITCH
     lora.setDio2AsRfSwitch(true);
-    LOG_DEBUG("SX126x AGC reset: DIO2 RF switch reapplied");
 #elif defined(ARCH_PORTDUINO)
     if (portduino_config.dio2_as_rf_switch)
         lora.setDio2AsRfSwitch(true);
@@ -479,23 +472,18 @@ template <typename T> void SX126xInterface<T>::resetAGC()
 
     // RX boosted gain mode
     lora.setRxBoostedGainMode(config.lora.sx126x_rx_boosted_gain);
-    LOG_DEBUG("SX126x AGC reset: RX boosted gain reapplied");
 
     // Re-apply the undocumented 0x8B5 RX sensitivity patch that was set in init().
     // The CALIBRATE_ALL (0x7F) command above clears bit 0 of register 0x8B5, which
     // silently removes the RX sensitivity improvement introduced in #9571 / #9777.
     // Without this re-apply, every SX1262 node loses its RX boost ~60s after boot
     // and never recovers until reboot. See empirical evidence in the PR description.
-    int16_t patchState = module.SPIsetRegValue(0x8B5, 0x01, 0, 0);
-    LOG_DEBUG("SX126x AGC reset: 0x8B5 patch SPIsetRegValue returned %d", patchState);
-    if (patchState != RADIOLIB_ERR_NONE) {
+    if (module.SPIsetRegValue(0x8B5, 0x01, 0, 0) != RADIOLIB_ERR_NONE) {
         LOG_WARN("SX126x resetAGC: failed to re-apply 0x8B5 RX sensitivity patch");
     }
 
     // 6. Resume receiving
-    LOG_DEBUG("SX126x AGC reset: calling startReceive()");
     startReceive();
-    LOG_DEBUG("SX126x AGC reset: startReceive() done, resetAGC complete");
 }
 
 /** Control PA mode for GC1109 FEM - CPS pin selects full PA (txon=true) or bypass mode (txon=false) */
